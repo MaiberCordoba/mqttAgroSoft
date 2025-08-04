@@ -1,0 +1,16 @@
+@keyframes auto-scroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(calc(-50% - 60px)); }
+}
+.auto-scroll-container {
+    animation: auto-scroll 30s linear infinite;
+    display: flex;
+    width: max-content;
+}
+.auto-scroll-content {
+    display: flex;
+    gap: 120px;
+}
+.auto-scroll-container:hover {
+    animation-play-state: paused;
+}
