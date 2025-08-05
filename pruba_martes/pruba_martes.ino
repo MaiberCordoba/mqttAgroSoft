@@ -1,21 +1,21 @@
 #include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <DHT.h>
-#include <Preferences.h> 
+#include <Preferences.h>
 
-// Definición de pines adaptados al segundo código
+// Definición de pines
 #define DHTPIN 4          // DHT22 en pin digital 4
 #define DHTTYPE DHT22
 #define PIN_HUMEDAD_SUELO A1  // YL-69 en pin analógico A1
 #define LDR_PIN A0        // Fotoresistor en pin analógico A0
 #define PIN_SONIDO A2     // Sensor de sonido en pin analógico A2
-#define PIN_RELAY 5       // Relé en pin digital 5
+#define PIN_RELAY 5       
 #define UMBRAL_HUMEDAD_MOTOR 30 
 
 DHT dht(DHTPIN, DHTTYPE);
 
-int valorSeco = 4095;    // Valor ALTO cuando está SECO (ajustar)
-int valorHumedo = 1000;  // Valor BAJO cuando está HÚMEDO (ajustar)
+int valorSeco = 4095;    // Valor ALTO cuando está SECO
+int valorHumedo = 1000;  // Valor BAJO cuando está HÚMEDO
 
 // Configuración MQTT
 const char* mqtt_server = "broker.hivemq.com";
@@ -26,7 +26,7 @@ const char* mqtt_topic_ldr = "karensensors/dht22/luminosity";
 const char* mqtt_topic_suelo = "karensensors/suelo/humedad";
 const char* mqtt_topic_sonido = "karensensors/sonido";
 const char* mqtt_topic_calib = "karensensors/suelo/calibracion";
-const char* mqtt_topic_relay = "karensensors/relay/estado"; // Nuevo tópico para estado del relé
+const char* mqtt_topic_relay = "karensensors/relay/estado";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -34,7 +34,7 @@ PubSubClient client(espClient);
 const long interval = 10000; // Intervalo de 10 segundos
 unsigned long previousMillis = 0;
 bool modoCalibracion = false;
-bool mqttConnected = false; // Estado de conexión MQTT
+bool mqttConnected = false;
 
 void setup() {
   Serial.begin(115200);
@@ -171,7 +171,7 @@ void ejecutarCalibracion() {
 }
 
 void connectToMQTT() {
-  String clientId = "ESP32Client-" + WiFi.macAddress(); // ID basado en MAC
+  String clientId = "ESP32Client-" + WiFi.macAddress();
   if (client.connect(clientId.c_str())) {
     Serial.println("✅ MQTT conectado");
     client.subscribe(mqtt_topic_calib);
@@ -184,76 +184,87 @@ void connectToMQTT() {
 }
 
 void publishSensorData() {
-  float temperature = dht.readTemperature();
-  float humidity = dht.readHumidity();
+  // Leer sensores analógicos primero
   int ldrValue = analogRead(LDR_PIN);
   int lecturaSuelo = analogRead(PIN_HUMEDAD_SUELO);
-  int sonido = analogRead(PIN_SONIDO);
-  
-  // Validar DHT22
-  if (isnan(temperature) || isnan(humidity)) {
-    Serial.println("ALERTA: Error leyendo DHT22 - Verificar conexión!");
-    return; // No publicar datos inválidos
-  }
+  // int sonido = analogRead(PIN_SONIDO); // Comentado: sensor desconectado
 
-  // Validar sensores analógicos
-  if (ldrValue >= 4090) {
-    Serial.println("ALERTA: Fotoresistor en 4095 - Verificar conexión!");
-    return;
-  } else if (ldrValue <= 10) {
-    Serial.println("ALERTA: Fotoresistor en 0 - Posible cortocircuito!");
-    return;
-  }
-  if (sonido >= 4090) {
-    Serial.println("ALERTA: Sensor de sonido en 4095 - Verificar conexión!");
-    return;
-  } else if (sonido <= 10) {
-    Serial.println("ALERTA: Sensor de sonido en 0 - Posible cortocircuito!");
-    return;
-  }
-  if (lecturaSuelo >= 4090) {
-    Serial.println("ALERTA: Sensor de suelo en 4095 - Verificar conexión!");
-    return;
-  } else if (lecturaSuelo <= 10) {
-    Serial.println("ALERTA: Sensor de suelo en 0 - Posible cortocircuito!");
-    return;
-  }
-
+  // Control del relé (antes de leer DHT22 para evitar interferencias)
   int humedadSuelo = map(lecturaSuelo, valorSeco, valorHumedo, 0, 100);
   humedadSuelo = constrain(humedadSuelo, 0, 100);
 
-  // Control del relé (activo en LOW para SRD-05VDC-SL-C)
-  if (humedadSuelo < UMBRAL_HUMEDAD_MOTOR) {
-    digitalWrite(PIN_RELAY, LOW); // Encender motor
-    Serial.println("Motor ENCENDIDO (Humedad baja)");
-    client.publish(mqtt_topic_relay, "ON");
-  } else {
-    digitalWrite(PIN_RELAY, HIGH); // Apagar motor
-    Serial.println("Motor APAGADO (Humedad adecuada)");
-    client.publish(mqtt_topic_relay, "OFF");
+  static bool relayState = false;
+  bool newState = humedadSuelo < UMBRAL_HUMEDAD_MOTOR; // Suelo seco → Relé ON
+  if (newState != relayState) {
+    if (newState) {
+      digitalWrite(PIN_RELAY, LOW); // Encender motor (suelo seco)
+      Serial.println("Motor ENCENDIDO (Suelo seco, necesita riego)");
+      client.publish(mqtt_topic_relay, "ON");
+    } else {
+      digitalWrite(PIN_RELAY, HIGH); // Apagar motor (suelo húmedo)
+      Serial.println("Motor APAGADO (Suelo húmedo, no necesita riego)");
+      client.publish(mqtt_topic_relay, "OFF");
+    }
+    relayState = newState;
+    delay(2000); // Retardo para estabilizar tras cambio del relé
   }
 
+  // Leer DHT22 después del relé
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+
+  // Preparar cadenas para publicación
   char tempStr[8], humStr[8], ldrStr[8], sueloStr[8], sonidoStr[8];
   
-  dtostrf(temperature, 4, 1, tempStr);
-  dtostrf(humidity, 4, 1, humStr);
-  itoa(ldrValue, ldrStr, 10);
-  itoa(humedadSuelo, sueloStr, 10);
-  itoa(sonido, sonidoStr, 10);
+  // Validar DHT22
+  if (isnan(temperature) || isnan(humidity)) {
+    Serial.println("ADVERTENCIA: Error leyendo DHT22 - Enviando N/A");
+    strcpy(tempStr, "N/A");
+    strcpy(humStr, "N/A");
+  } else {
+    dtostrf(temperature, 4, 1, tempStr);
+    dtostrf(humidity, 4, 1, humStr);
+  }
 
+  // Validar LDR (tratar 4095 como válido)
+  if (ldrValue <= 10) {
+    Serial.println("ALERTA: Fotoresistor en 0 - Posible cortocircuito! Enviando N/A");
+    strcpy(ldrStr, "N/A");
+  } else {
+    itoa(ldrValue, ldrStr, 10); // Enviar valor incluso si es 4095
+    if (ldrValue >= 4090) {
+      Serial.println("NOTA: Fotoresistor en 4095 - Luz intensa detectada");
+    }
+  }
+
+  // Validar YL-69
+  if (lecturaSuelo <= 10) {
+    Serial.println("ALERTA: Sensor de suelo en 0 - Posible cortocircuito! Enviando N/A");
+    strcpy(sueloStr, "N/A");
+  } else {
+    itoa(humedadSuelo, sueloStr, 10);
+    if (lecturaSuelo >= 4090) {
+      Serial.println("NOTA: Sensor de suelo en 4095 - Suelo seco o desconectado");
+    }
+  }
+
+  strcpy(sonidoStr, "0"); // Valor dummy para sonido
+
+  // Publicar datos al broker
+  Serial.println("Publicando datos al broker...");
   client.publish(mqtt_topic_temp, tempStr);
   client.publish(mqtt_topic_hum, humStr);
   client.publish(mqtt_topic_ldr, ldrStr);
   client.publish(mqtt_topic_suelo, sueloStr);
   client.publish(mqtt_topic_sonido, sonidoStr);
 
+  // Imprimir diagnóstico
   Serial.println("===== DIAGNÓSTICO COMPLETO =====");
   Serial.print("Temperatura: "); Serial.print(tempStr); Serial.println("°C");
   Serial.print("Humedad amb: "); Serial.print(humStr); Serial.println("%");
-  Serial.print("Luminosidad: "); Serial.println(ldrValue);
-  
+  Serial.print("Luminosidad: "); Serial.println(ldrStr);
   Serial.print("Humedad suelo: ");
-  Serial.print(humedadSuelo);
+  Serial.print(sueloStr);
   Serial.print("% (RAW: ");
   Serial.print(lecturaSuelo);
   Serial.print(") [Seco: ");
@@ -261,8 +272,8 @@ void publishSensorData() {
   Serial.print(" | Húmedo: ");
   Serial.print(valorHumedo);
   Serial.println("]");
-  
-  Serial.print("Sonido: "); Serial.println(sonido);
+  Serial.print("Sonido: "); Serial.println("Desconectado");
+  Serial.print("Relé: "); Serial.println(newState ? "ON (Suelo seco)" : "OFF (Suelo húmedo)");
   Serial.println("================================");
 }
 
@@ -285,22 +296,19 @@ void reconnect() {
   if (!client.connected()) {
     Serial.println("No se pudo conectar a MQTT. Continuando en modo offline...");
     mqttConnected = false;
-    // Continuar funcionando localmente (control del relé y lecturas)
     float temperature = dht.readTemperature();
     float humidity = dht.readHumidity();
     int ldrValue = analogRead(LDR_PIN);
     int lecturaSuelo = analogRead(PIN_HUMEDAD_SUELO);
-    int sonido = analogRead(PIN_SONIDO);
-    
     int humedadSuelo = map(lecturaSuelo, valorSeco, valorHumedo, 0, 100);
     humedadSuelo = constrain(humedadSuelo, 0, 100);
 
     if (humedadSuelo < UMBRAL_HUMEDAD_MOTOR) {
-      digitalWrite(PIN_RELAY, LOW); // Encender motor
-      Serial.println("Motor ENCENDIDO (Humedad baja, modo offline)");
+      digitalWrite(PIN_RELAY, LOW); // Encender motor (suelo seco)
+      Serial.println("Motor ENCENDIDO (Suelo seco, modo offline)");
     } else {
-      digitalWrite(PIN_RELAY, HIGH); // Apagar motor
-      Serial.println("Motor APAGADO (Humedad adecuada, modo offline)");
+      digitalWrite(PIN_RELAY, HIGH); // Apagar motor (suelo húmedo)
+      Serial.println("Motor APAGADO (Suelo húmedo, modo offline)");
     }
   }
 }

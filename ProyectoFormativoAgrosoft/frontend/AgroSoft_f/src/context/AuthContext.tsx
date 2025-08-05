@@ -96,7 +96,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     };
 
     verifyToken();
-    const interval = setInterval(verifyToken, 5 * 1000); // Reducido a 5 segundos
+    const interval = setInterval(verifyToken, 50 * 1000); // Reducido a 5 segundos
     return () => clearInterval(interval);
   }, [token, isTokenValid, refetchUser]);
 

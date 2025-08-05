@@ -110,4 +110,4 @@ export const LineChart = ({ data }: LineChartProps) => {
   };
 
   return <Line data={chartData} options={options} />;
-};
+}
